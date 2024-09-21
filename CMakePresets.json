@@ -3,8 +3,8 @@
   "configurePresets": [
     {
       "name": "default",
-      "description": "Generate Ninja project files",
-      "generator": "Ninja Multi-Config",
+      "description": "Generate project files using Visual Studio",
+      "generator": "Visual Studio 17 2022",
       "binaryDir": "${sourceDir}/build"
     },
     {
@@ -12,8 +12,11 @@
       "inherits": [
         "default"
       ],
-      "description": "Configure with vcpkg toolchain and generate Ninja project files",
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      "description": "Configure with vcpkg toolchain",
+      "toolchainFile": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "OPENSSL_ROOT_DIR": "C:/vcpkg/installed/x64-windows"
+      }
     }
   ],
   "buildPresets": [
