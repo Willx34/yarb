@@ -7,8 +7,8 @@ set(CMAKE_DISABLE_IN_SOURCE_BUILD ON)
 # driving the vcpkg triplet in the same way either when starting vcpkg directly,
 # or when letting CMake start vcpkg at configure/generate time.
 # Note: this logic must happen before PROJECT command.
-if (DEFINED ENV{VCPKG_DEFAULT_TRIPLET} AND NOT DEFINED VCPKG_TARGET_TRIPLET)
-    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_DEFAULT_TRIPLET}" CACHE STRING "The vcpkg triplet")
+if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
 endif()
 
 set(BOOST_REQUIRED_VERSION 1.71.0)
@@ -59,10 +59,12 @@ endif()
 # If we link to the file directly, we might miss its dependencies from vcpkg
 find_package(unofficial-libmariadb CONFIG)
 if (unofficial-libmariadb_FOUND)
-    set(MYSQL_CLIENT_LIBS "unofficial::libmariadb")
+   set(MYSQL_CLIENT_LIBS "unofficial::libmariadb")
 else ()
     find_package(MySQL REQUIRED)
 endif ()
+
+
 
 find_package(Threads REQUIRED)
 find_package(PugiXML CONFIG REQUIRED)
