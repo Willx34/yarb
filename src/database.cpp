@@ -9,6 +9,8 @@
 
 #include <mysql/errmsg.h>
 
+#include <mysql/mysql.h>
+
 static tfs::detail::Mysql_ptr connectToDatabase(const bool retryIfError)
 {
 	bool isFirstAttemptToConnect = true;
@@ -241,4 +243,20 @@ bool DBInsert::execute()
 	values.clear();
 	length = query.length();
 	return res;
+}
+
+unsigned int Database::getLastErrorCode() const
+{
+    if (handle) {
+        return mysql_errno(handle.get());
+    }
+    return 0;
+}
+
+std::string Database::getLastError() const
+{
+    if (handle) {
+        return mysql_error(handle.get());
+    }
+    return {};
 }

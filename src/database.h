@@ -101,6 +101,20 @@ public:
 
 	uint64_t getMaxPacketSize() const { return maxPacketSize; }
 
+    /**
+     * Retrieve the last error code from the database connection.
+     *
+     * @return The last error code.
+     */
+    unsigned int getLastErrorCode() const;
+
+	    /**
+     * Retrieve the last error message from the database connection.
+     *
+     * @return The last error message.
+     */
+    std::string getLastError() const;
+
 private:
 	/**
 	 * Transaction related methods.
