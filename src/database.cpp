@@ -242,3 +242,19 @@ bool DBInsert::execute()
 	length = query.length();
 	return res;
 }
+
+unsigned int Database::getLastErrorCode() const
+{
+    if (handle) {
+        return mysql_errno(handle.get());
+    }
+    return 0; // or an appropriate error code
+}
+
+std::string Database::getLastError() const
+{
+    if (handle) {
+        return mysql_error(handle.get());
+    }
+    return "No database connection";
+}

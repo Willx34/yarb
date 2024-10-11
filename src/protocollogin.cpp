@@ -13,6 +13,8 @@
 #include "outputmessage.h"
 #include "rsa.h"
 #include "tasks.h"
+#include <random>
+#include <openssl/rand.h>
 
 extern Game g_game;
 
@@ -51,127 +53,174 @@ std::string decodeSecret(std::string_view secret)
 
 void ProtocolLogin::disconnectClient(const std::string& message, uint16_t version)
 {
-	auto output = OutputMessagePool::getOutputMessage();
+    auto output = OutputMessagePool::getOutputMessage();
 
-	output->addByte(version >= 1076 ? 0x0B : 0x0A);
-	output->addString(message);
-	send(output);
+    output->addByte(version >= 1076 ? 0x0B : 0x0A);
+    output->addString(message);
+    send(output);
 
-	disconnect();
+    disconnect();
+}
+
+    // Helper function to convert binary data to hexadecimal string
+std::string toHex(const unsigned char* data, size_t length) {
+    static const char hex_digits[] = "0123456789ABCDEF";
+    std::string result;
+    result.reserve(length * 2);
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char byte = data[i];
+        result.push_back(hex_digits[byte >> 4]);
+        result.push_back(hex_digits[byte & 0x0F]);
+    }
+    return result;
 }
 
 void ProtocolLogin::getCharacterList(const std::string& accountName, const std::string& password,
                                      const std::string& token, uint16_t version)
 {
-	Database& db = Database::getInstance();
+    Database& db = Database::getInstance();
 
-	DBResult_ptr result = db.storeQuery(fmt::format(
-	    "SELECT `id`, UNHEX(`password`) AS `password`, `secret`, `premium_ends_at` FROM `accounts` WHERE `name` = {:s} OR `email` = {:s}",
-	    db.escapeString(accountName), db.escapeString(accountName)));
-	if (!result) {
-		disconnectClient("Account name or password is not correct.", version);
-		return;
-	}
+    DBResult_ptr result = db.storeQuery(fmt::format(
+        "SELECT `id`, UNHEX(`password`) AS `password`, `secret`, `premium_ends_at` FROM `accounts` WHERE `name` = {:s} OR `email` = {:s}",
+        db.escapeString(accountName), db.escapeString(accountName)));
+    if (!result) {
+        disconnectClient("Account name or password is not correct.", version);
+        return;
+    }
 
-	if (transformToSHA1(password) != result->getString("password")) {
-		disconnectClient("Account name or password is not correct.", version);
-		return;
-	}
+    if (transformToSHA1(password) != result->getString("password")) {
+        disconnectClient("Account name or password is not correct.", version);
+        return;
+    }
 
-	auto id = result->getNumber<uint32_t>("id");
-	auto key = decodeSecret(result->getString("secret"));
-	auto premiumEndsAt = result->getNumber<time_t>("premium_ends_at");
+    auto id = result->getNumber<uint32_t>("id");
+    auto key = decodeSecret(result->getString("secret"));
+    auto premiumEndsAt = result->getNumber<time_t>("premium_ends_at");
 
-	std::vector<std::string> characters = {};
-	result = db.storeQuery(fmt::format(
-	    "SELECT `name` FROM `players` WHERE `account_id` = {:d} AND `deletion` = 0 ORDER BY `name` ASC", id));
-	if (result) {
-		do {
-			characters.emplace_back(result->getString("name"));
-		} while (result->next());
-	}
+    std::vector<std::string> characters = {};
+    result = db.storeQuery(fmt::format(
+        "SELECT `name` FROM `players` WHERE `account_id` = {:d} AND `deletion` = 0 ORDER BY `name` ASC", id));
+    if (result) {
+        do {
+            characters.emplace_back(result->getString("name"));
+        } while (result->next());
+    }
 
-	uint32_t ticks = duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count() /
-	                 AUTHENTICATOR_PERIOD;
+    uint32_t ticks = duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count() /
+                     AUTHENTICATOR_PERIOD;
 
-	auto output = OutputMessagePool::getOutputMessage();
-	if (!key.empty()) {
-		if (token.empty() || !(token == generateToken(key, ticks) || token == generateToken(key, ticks - 1) ||
-		                       token == generateToken(key, ticks + 1))) {
-			output->addByte(0x0D);
-			output->addByte(0);
-			send(output);
-			disconnect();
-			return;
-		}
-		output->addByte(0x0C);
-		output->addByte(0);
-	}
+    auto output = OutputMessagePool::getOutputMessage();
+    if (!key.empty()) {
+        if (token.empty() || !(token == generateToken(key, ticks) || token == generateToken(key, ticks - 1) ||
+                               token == generateToken(key, ticks + 1))) {
+            output->addByte(0x0D);
+            output->addByte(0);
+            send(output);
+            disconnect();
+            return;
+        }
+        output->addByte(0x0C);
+        output->addByte(0);
+    }
 
-	// Generate and add session key
-	static std::independent_bits_engine<std::default_random_engine, CHAR_BIT, unsigned short> rbe;
-	std::string sessionKey(16, '\x00');
-	std::generate(sessionKey.begin(), sessionKey.end(), std::ref(rbe));
-
-	output->addByte(0x28);
-	output->addString(tfs::base64::encode({sessionKey.data(), sessionKey.size()}));
-
-	if (!db.executeQuery(fmt::format(
-	        "INSERT INTO `sessions` (`token`, `account_id`, `ip`) VALUES ({:s}, {:d}, INET6_ATON({:s}))",
-	        db.escapeBlob(sessionKey.data(), sessionKey.size()), id, getConnection()->getIP().to_string()))) {
-		disconnectClient("Failed to create session.\nPlease try again later.", version);
-		return;
-	}
-
-	// Add char list
-	output->addByte(0x64);
-
-	uint8_t size = std::min<size_t>(std::numeric_limits<uint8_t>::max(), characters.size());
-
-	if (getBoolean(ConfigManager::ONLINE_OFFLINE_CHARLIST)) {
-		output->addByte(2); // number of worlds
-
-		for (uint8_t i = 0; i < 2; i++) {
-			output->addByte(i); // world id
-			output->addString(i == 0 ? "Offline" : "Online");
-			output->addString(getString(ConfigManager::IP));
-			output->add<uint16_t>(getNumber(ConfigManager::GAME_PORT));
-			output->addByte(0);
-		}
-	} else {
-		output->addByte(1); // number of worlds
-		output->addByte(0); // world id
-		output->addString(getString(ConfigManager::SERVER_NAME));
-		output->addString(getString(ConfigManager::IP));
-		output->add<uint16_t>(getNumber(ConfigManager::GAME_PORT));
-		output->addByte(0);
-	}
-
-	output->addByte(size);
-	for (uint8_t i = 0; i < size; i++) {
-		const auto& character = characters[i];
-		if (getBoolean(ConfigManager::ONLINE_OFFLINE_CHARLIST)) {
-			output->addByte(g_game.getPlayerByName(character) ? 1 : 0);
-		} else {
-			output->addByte(0);
-		}
-		output->addString(character);
-	}
-
-	// Add premium days
-	output->addByte(0);
-	if (getBoolean(ConfigManager::FREE_PREMIUM)) {
-		output->addByte(1);
-		output->add<uint32_t>(0);
-	} else {
-		output->addByte(premiumEndsAt > time(nullptr) ? 1 : 0);
-		output->add<uint32_t>(premiumEndsAt);
-	}
-
-	send(output);
-
-	disconnect();
+  // Generate and add session key using a CSPRNG
+std::string sessionKey(16, '\0');
+if (RAND_bytes(reinterpret_cast<unsigned char*>(&sessionKey[0]), sessionKey.size()) != 1) {
+    disconnectClient("Failed to generate session.\nPlease try again later.", version);
+    return;
 }
+
+// Attempt to insert the session key into the database with collision handling
+const int MAX_ATTEMPTS = 5;
+bool sessionInserted = false;
+for (int attempt = 0; attempt < MAX_ATTEMPTS; ++attempt) {
+    // Convert session key to hexadecimal string
+    std::string hexSessionKey = toHex(reinterpret_cast<const unsigned char*>(sessionKey.data()), sessionKey.size());
+
+    // Prepare the SQL query using hexadecimal notation
+    std::string query = fmt::format(
+        "INSERT INTO `sessions` (`token`, `account_id`, `ip`) VALUES (UNHEX('{}'), {}, INET6_ATON('{}'))",
+        hexSessionKey, id, getConnection()->getIP().to_string());
+
+    // Execute the query
+    if (db.executeQuery(query)) {
+        sessionInserted = true;
+        break; // Success
+    } else {
+        // Check if the error is due to duplicate entry
+        if (db.getLastErrorCode() == 1062) { // 1062 is the MySQL error code for duplicate entry
+            // Duplicate token detected, generate a new one
+            if (RAND_bytes(reinterpret_cast<unsigned char*>(&sessionKey[0]), sessionKey.size()) != 1) {
+                disconnectClient("Failed to generate session.\nPlease try again later.", version);
+                return;
+            }
+        } else {
+            // Other database error occurred
+            disconnectClient("Database error occurred.\nPlease try again later.", version);
+            return;
+        }
+    }
+}
+
+if (!sessionInserted) {
+    disconnectClient("Failed to create session.\nPlease try again later.", version);
+    return;
+}
+
+// Send the session key to the client
+output->addByte(0x28);
+output->addString(tfs::base64::encode({sessionKey.data(), sessionKey.size()}));
+
+    // Add character list
+    output->addByte(0x64);
+
+    uint8_t size = std::min<size_t>(std::numeric_limits<uint8_t>::max(), characters.size());
+
+    if (getBoolean(ConfigManager::ONLINE_OFFLINE_CHARLIST)) {
+        output->addByte(2); // number of worlds
+
+        for (uint8_t i = 0; i < 2; i++) {
+            output->addByte(i); // world id
+            output->addString(i == 0 ? "Offline" : "Online");
+            output->addString(getString(ConfigManager::IP));
+            output->add<uint16_t>(getNumber(ConfigManager::GAME_PORT));
+            output->addByte(0);
+        }
+    } else {
+        output->addByte(1); // number of worlds
+        output->addByte(0); // world id
+        output->addString(getString(ConfigManager::SERVER_NAME));
+        output->addString(getString(ConfigManager::IP));
+        output->add<uint16_t>(getNumber(ConfigManager::GAME_PORT));
+        output->addByte(0);
+    }
+
+    output->addByte(size);
+    for (uint8_t i = 0; i < size; i++) {
+        const auto& character = characters[i];
+        if (getBoolean(ConfigManager::ONLINE_OFFLINE_CHARLIST)) {
+            output->addByte(g_game.getPlayerByName(character) ? 1 : 0);
+        } else {
+            output->addByte(0);
+        }
+        output->addString(character);
+    }
+
+    // Add premium days
+    output->addByte(0);
+    if (getBoolean(ConfigManager::FREE_PREMIUM)) {
+        output->addByte(1);
+        output->add<uint32_t>(0);
+    } else {
+        output->addByte(premiumEndsAt > time(nullptr) ? 1 : 0);
+        output->add<uint32_t>(premiumEndsAt);
+    }
+
+    send(output);
+
+    disconnect();
+}
+
 
 // Character list request
 void ProtocolLogin::onRecvFirstMessage(NetworkMessage& msg)

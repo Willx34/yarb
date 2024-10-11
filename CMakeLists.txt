@@ -7,8 +7,9 @@ set(CMAKE_DISABLE_IN_SOURCE_BUILD ON)
 # driving the vcpkg triplet in the same way either when starting vcpkg directly,
 # or when letting CMake start vcpkg at configure/generate time.
 # Note: this logic must happen before PROJECT command.
-if (DEFINED ENV{VCPKG_DEFAULT_TRIPLET} AND NOT DEFINED VCPKG_TARGET_TRIPLET)
-    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_DEFAULT_TRIPLET}" CACHE STRING "The vcpkg triplet")
+# Ensure to pick up the default triplet from the environment if any.
+if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
 endif()
 
 set(BOOST_REQUIRED_VERSION 1.71.0)
@@ -48,6 +49,12 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
 endif ()
 
 # Find packages.
+set(OPENSSL_ROOT_DIR "C:/vcpkg/packages/openssl_x64-windows")
+set(OPENSSL_INCLUDE_DIR "C:/vcpkg/packages/openssl_x64-windows/include")
+set(OPENSSL_LIBRARIES "C:/vcpkg/packages/openssl_x64-windows/lib/libssl.lib;C:/vcpkg/packages/openssl_x64-windows/lib/libcrypto.lib")
+
+find_package(OpenSSL 3.0.0 REQUIRED)
+
 find_package(OpenSSL 3.0.0 REQUIRED COMPONENTS Crypto)
 
 find_package(fmt 8.1.1 CONFIG)
